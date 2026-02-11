@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools", "wheel", "Cython"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rocuronium_recovery_curve"
+version = "0.0.1"
+requires-python = ">=3.12"
+license = {file = "./LICENSE"}
+description = "Muscle activity depression under rucoronium"
+authors = [
+    {name = "Core Unit Bioinformatic Ruhr University Bochum", email = "cubimed@rub.de"},
+]
+maintainers = [
+    {name = "Dirk Winkelhardt", email = "dirk.winkelhardt@rub.de"}
+]
+
+dependencies = [
+    "fastexcel",
+    "kaleido",
+    "numpy",
+    "plotly",
+    "polars",
+    "scipy"
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipykernel",
+    "ruff",
+    "ty",
+    "scipy-stubs"
+]
