@@ -33,8 +33,8 @@ ELAPSED_SEC_COL: str = "elapsed_sec"
 AMPLITUDE_COL: str = "amplitude"
 NORMALIZED_AMPLITUDE_COL: str = "normalized_amplitude"
 GAUSSIAN_SIGNAL_SMOOTHING_COL: str = "gaussian_signal_smoothing"
-GAUSSIAN_SIGNAL_SMOOTHING_DERIVATE_COL: str = "gaussian_signal_smoothing_derivate"
-GAUSSIAN_SIGNAL_SMOOTHING_DERIVATE_INTERVALS_COL: str = "gaussian_signal_smoothing_derivate_intervals"
+GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL: str = "gaussian_signal_smoothing_slope"
+GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL: str = "gaussian_signal_smoothing_slope_intervals"
 TOF_COUNT_COL: str = "tof_count"
 
 def cli() -> argparse.Namespace:
@@ -100,27 +100,27 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
     )
 
     # Calculate derivate of the gaussian smoothing
-    gaussian_signal_smoothing_derivate = np.gradient(gaussian_signal_smoothing, first_tofs_above_zero[ELAPSED_SEC_COL])
+    gaussian_signal_smoothing_slope = np.gradient(gaussian_signal_smoothing, first_tofs_above_zero[ELAPSED_SEC_COL])
     first_tofs_above_zero.insert_column(
         len(first_tofs_above_zero.columns),
-        pl.Series(GAUSSIAN_SIGNAL_SMOOTHING_DERIVATE_COL, gaussian_signal_smoothing_derivate)
+        pl.Series(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL, gaussian_signal_smoothing_slope)
     )
 
     # Positive value filter/expression for gaussian smoothing
-    pos_filter = pl.col(GAUSSIAN_SIGNAL_SMOOTHING_DERIVATE_COL) >= 0
+    pos_filter = pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) >= 0
     # Find positive value with no positive value before, i.e. the start of a positive derivate
     start_pos = pos_filter & (~pos_filter.shift(1).fill_null(False))
 
     # Create a running ID for all intervals with consecutive pos/neg values
     first_tofs_above_zero = first_tofs_above_zero.with_columns(
-        start_pos.cast(pl.Int64).cum_sum().alias(GAUSSIAN_SIGNAL_SMOOTHING_DERIVATE_INTERVALS_COL)
+        start_pos.cast(pl.Int64).cum_sum().alias(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL)
     )
 
     # Select positive gaussian derivate
-    first_tofs_above_zero_pos_derivate = first_tofs_above_zero.filter(pl.col(GAUSSIAN_SIGNAL_SMOOTHING_DERIVATE_COL) > 0)
+    first_tofs_above_zero_pos_slope = first_tofs_above_zero.filter(pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) > 0)
 
     # Group interval
-    pos_derivate_intervals = first_tofs_above_zero_pos_derivate.group_by(GAUSSIAN_SIGNAL_SMOOTHING_DERIVATE_INTERVALS_COL)
+    pos_slope_intervals = first_tofs_above_zero_pos_slope.group_by(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL)
 
     fig.add_scatter(
         x=first_tofs_above_zero[ELAPSED_SEC_COL].to_list(),
@@ -131,13 +131,13 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
         visible="legendonly"
     )
 
-    for (name, interval) in iter(pos_derivate_intervals):
+    for (name, interval) in iter(pos_slope_intervals):
         fig.add_scatter(
             x=interval[ELAPSED_SEC_COL].to_list(),
             y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
             text=interval["Elapsed time (hh:mm:ss)"].to_list(),
             mode="lines",
-            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos deviation ({name[0]})"
+            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({name[0]})"
         )
 
 def process_patient_file(patient_file: Path, result_folder: Path):
