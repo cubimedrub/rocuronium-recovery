@@ -127,9 +127,9 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
     first_tofs_above_zero_pos_slope = first_tofs_above_zero.filter(pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) > 0)
 
     # Group interval
-    pos_slope_intervals: List[Tuple[int, pl.DataFrame]] = list(iter(first_tofs_above_zero_pos_slope.group_by(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL)))
+    pos_slope_intervals: List[Tuple[Tuple[int], pl.DataFrame]] = list(iter(first_tofs_above_zero_pos_slope.group_by(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL)))
 
-    pos_slope_intervals.sort(key=lambda g: g[0])
+    pos_slope_intervals.sort(key=lambda g: g[0][0])
 
 
     fig.add_scatter(
