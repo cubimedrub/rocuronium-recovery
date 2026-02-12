@@ -145,6 +145,12 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
         median = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
         offset = interval[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
 
+        if not isinstance(median, float):
+            raise ValueError(f"Median of slope is not a floating point numbers but {type(median)}")
+
+        if not isinstance(offset, float):
+            raise ValueError(f"Interval y-offset is not a floating point numbers but {type(offset)}")
+
         median_line = np.array([median * x + offset for x in range(interval.height)])
 
         fig.add_scatter(
