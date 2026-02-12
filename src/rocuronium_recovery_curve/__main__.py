@@ -100,7 +100,7 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
     )
 
     # Calculate derivate of the gaussian smoothing
-    gaussian_signal_smoothing_slope = np.gradient(gaussian_signal_smoothing, first_tofs_above_zero[ELAPSED_SEC_COL])
+    gaussian_signal_smoothing_slope = np.gradient(gaussian_signal_smoothing, 1.0)
     first_tofs_above_zero.insert_column(
         len(first_tofs_above_zero.columns),
         pl.Series(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL, gaussian_signal_smoothing_slope)
