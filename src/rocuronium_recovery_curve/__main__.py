@@ -132,12 +132,25 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
     )
 
     for (name, interval) in iter(pos_slope_intervals):
+        median = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
+        offset = interval[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
+
+        median_line = np.array([median * x + offset for x in range(interval.height)])
+
         fig.add_scatter(
             x=interval[ELAPSED_SEC_COL].to_list(),
             y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
             text=interval["Elapsed time (hh:mm:ss)"].to_list(),
             mode="lines",
             name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({name[0]})"
+        )
+
+        fig.add_scatter(
+            x=interval[ELAPSED_SEC_COL].to_list(),
+            y=median_line,
+            text=interval["Elapsed time (hh:mm:ss)"],
+            mode="lines",
+            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({name[0]}) median",
         )
 
 def process_patient_file(patient_file: Path, result_folder: Path):
