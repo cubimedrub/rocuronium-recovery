@@ -37,6 +37,13 @@ GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL: str = "gaussian_signal_smoothing_slope"
 GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL: str = "gaussian_signal_smoothing_slope_intervals"
 TOF_COUNT_COL: str = "tof_count"
 
+
+# Some colorblind-friendly colors according to Wong https://www.nature.com/articles/nmeth.1618
+CB_BLACK = "rgb(0,0,0)"
+CB_BLUISH_GREEN = "rgb(0,158,115)"
+CB_BLUE = "rgb(0,114,178)"
+CB_VERMILLION = "rgb(213,94,0)"
+
 def cli() -> argparse.Namespace:
     """
     Parses command line arguments for the Rocuronium recovery curve analysis.
@@ -120,7 +127,10 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
     first_tofs_above_zero_pos_slope = first_tofs_above_zero.filter(pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) > 0)
 
     # Group interval
-    pos_slope_intervals = first_tofs_above_zero_pos_slope.group_by(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL)
+    pos_slope_intervals: List[Tuple[int, pl.DataFrame]] = list(iter(first_tofs_above_zero_pos_slope.group_by(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL)))
+
+    pos_slope_intervals.sort(key=lambda g: g[0])
+
 
     fig.add_scatter(
         x=first_tofs_above_zero[ELAPSED_SEC_COL].to_list(),
@@ -131,7 +141,7 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
         visible="legendonly"
     )
 
-    for (name, interval) in iter(pos_slope_intervals):
+    for (name, interval) in pos_slope_intervals:
         median = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
         offset = interval[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
 
@@ -142,6 +152,7 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
             y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
             text=interval["Elapsed time (hh:mm:ss)"].to_list(),
             mode="lines",
+            line=dict(color=CB_BLUISH_GREEN),
             name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({name[0]})"
         )
 
@@ -150,6 +161,8 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
             y=median_line,
             text=interval["Elapsed time (hh:mm:ss)"],
             mode="lines",
+            line_dash="dot",
+            line=dict(color=CB_VERMILLION),
             name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({name[0]}) median",
         )
 
@@ -240,6 +253,7 @@ def process_patient_file(patient_file: Path, result_folder: Path):
          y=first_tofs[NORMALIZED_AMPLITUDE_COL].to_list(),
          text=first_tofs["Elapsed time (hh:mm:ss)"].to_list(),
          mode="lines",
+         line=dict(color=CB_BLACK),
          name="norm. TOF ampl.",
          visible="legendonly"
      )
@@ -249,6 +263,7 @@ def process_patient_file(patient_file: Path, result_folder: Path):
          y=first_tofs_above_zero[NORMALIZED_AMPLITUDE_COL].to_list(),
          text=first_tofs["Elapsed time (hh:mm:ss)"].to_list(),
          mode="lines",
+         line=dict(color=CB_BLUE),
          name="norm. TOF ampl. > 0",
          visible="legendonly"
      )
