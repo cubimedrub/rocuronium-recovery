@@ -3,10 +3,13 @@ import datetime
 from pathlib import Path
 from typing import List, Tuple
 
+import kaleido
+import kaleido.kaleido
 import numpy as np
 import plotly.graph_objects as pgo
 import polars as pl
 from scipy.ndimage import gaussian_filter1d
+from wcwidth import width
 
 # Original columns
 ELAPSED_TIME_COL: str = "Elapsed time (hh:mm:ss)"
@@ -298,6 +301,7 @@ def process_patient_file(patient_file: Path, result_folder: Path):
 
 
     fig.write_html(base_result_path.with_suffix(".html"))
+    fig.write_image(base_result_path.with_suffix(".png"), width=1920, height=800)
 
 def main():
     """
@@ -325,11 +329,19 @@ def main():
         )
     )
 
+    # Starts a "browser" in background to speed up image generation with Plotly (pl.Figure().write_image())
+    kaleido.start_sync_server(
+        width=1920,
+        height=800
+    )
+
     for patient_file in patient_files:
         try:
             process_patient_file(patient_file, cli_args.result_folder)
         except BaseException as err:
             print(f"{err} @ {patient_file}")
+
+    kaleido.stop_sync_server()
 
 if __name__ == "__main__":
     main()
