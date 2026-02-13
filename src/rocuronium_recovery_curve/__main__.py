@@ -142,16 +142,28 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
     )
 
     for (name, interval) in pos_slope_intervals:
-        median = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
+        median_slope = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
         offset = interval[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
 
-        if not isinstance(median, float):
-            raise ValueError(f"Median of slope is not a floating point numbers but {type(median)}")
+        try:
+            median_line_x = np.array([
+                interval[ELAPSED_SEC_COL].first(),
+                interval[ELAPSED_SEC_COL].last()
+            ], dtype=np.int64)
+        except Exception as err:
+            raise ValueError(f"Failed to convert median line x values to float: {err}")
+
+        if not isinstance(median_slope, float):
+            raise ValueError(f"Median of slope is not a floating point numbers but {type(median_slope)}")
 
         if not isinstance(offset, float):
             raise ValueError(f"Interval y-offset is not a floating point numbers but {type(offset)}")
 
-        median_line = np.array([median * x + offset for x in range(interval.height)])
+
+        median_line_y = np.array([
+            offset, # median_slope * 0 + offset
+            median_slope * interval.height + offset,
+        ], np.float64)
 
         fig.add_scatter(
             x=interval[ELAPSED_SEC_COL].to_list(),
@@ -163,9 +175,9 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
         )
 
         fig.add_scatter(
-            x=interval[ELAPSED_SEC_COL].to_list(),
-            y=median_line,
-            text=interval["Elapsed time (hh:mm:ss)"],
+            x=median_line_x,
+            y=median_line_y,
+            text=[format(f"{i} (median slope = {median_slope})") for i in median_line_x],
             mode="lines",
             line_dash="dot",
             line=dict(color=CB_VERMILLION),
