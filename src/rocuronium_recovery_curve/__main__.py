@@ -266,7 +266,7 @@ def load_medication_administration(
     }
 
     medication_administration = medication_administration.filter(
-        (pl.col(MA_MED) == "Rocuronium") | (pl.col(MA_MED) == "Rocuronium")
+        (pl.col(MA_MED) == "Rocuronium") | (pl.col(MA_MED) == "Sugammadex")
     )
     medication_administration = medication_administration.with_columns(
         pl.Series(
