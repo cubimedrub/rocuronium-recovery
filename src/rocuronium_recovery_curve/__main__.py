@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import logging
 import re
 import traceback
 from pathlib import Path
@@ -121,10 +122,11 @@ def cli() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "-v",
         "--verbose",
-        default=False,
-        action="store_true",
-        help="Prints traceback on error for easier debugging",
+        default=0,
+        action="count",
+        help="Can be used multiple time, e.g. `-vvvvv` or `--verbose --verbose`, each time the log level is increased 1 => Warning, 2 => Info, 3 => Debug + Tracebacks",
     )
 
     parser.add_argument(
@@ -139,6 +141,30 @@ def cli() -> argparse.Namespace:
     )
 
     return parser.parse_args()
+
+
+def verbosity_to_error_level(verbosity: int) -> int:
+    """
+    Converts a verbosity level to a logging error level.
+
+    Parameters
+    ----------
+    verbosity : int
+        The verbosity level, where higher values indicate more verbose output.
+
+    Returns
+    -------
+    int
+        The corresponding logging error level.
+    """
+    if verbosity <= 0:
+        return logging.ERROR
+    elif verbosity == 1:
+        return logging.WARNING
+    elif verbosity == 2:
+        return logging.INFO
+    else:
+        return logging.DEBUG
 
 
 def hms_to_seconds(hms: str) -> int:
@@ -548,10 +574,10 @@ def plot_processed_data(
 def process_patient_file(
     patient_file: Path,
     med_administration: Optional[pl.DataFrame],
-    result_folder: Path,
+    base_result_path: Path,
     patiend_id_regex: re.Pattern,
     interval_merge_threshold: float,
-    is_verbose: bool,
+    logger: logging.Logger,
 ):
     """
     Processes a single patient Excel file to extract TOF measurements, calculate amplitudes, and generate a recovery curve plot.
@@ -562,19 +588,18 @@ def process_patient_file(
         The path to the patient's Excel file containing TOF measurements.
     med_administration : Optional[pl.DataFrame]
         Optional DataFrame containing medication administration timestamps, used for reference in the analysis.
-    result_folder : Path
-        The path to the folder where the resulting plot and filtered data will be saved.
+    base_result_path : Path
+        The base path for each result file derived by processing the given patient file. Just use with_suffix
     patiend_id_regex : Path
         A compiled regular expression used to extract the patient ID from the patient file name.
     interval_merge_threshold : float
         Amplitude change threshold for merging subsequent negative slope intervals with recovery.
         If the amplitude change of the negative slope interval is smaller than this ratio of the previous positive slope interval, it gets merged into the recovery curve.
-    is_verbose : bool
-        If True, prints detailed error messages and tracebacks for debugging purposes.
+    logger : loggging.Logger
+        Logger
     """
 
-    print(f"Reading {patient_file}...")
-    base_result_path = result_folder.joinpath(patient_file.stem)
+    logger.info(f"Reading {patient_file}...")
 
     # Read file. Skip first row as it only contains device and vendor name. Only keep important columns
     muscle_activity = pl.read_excel(
@@ -737,12 +762,12 @@ def process_patient_file(
 
     except BaseException as err:
         errored_tofs_path = base_result_path.with_suffix(".errored.tofs.csv")
-        print(
+        tofs.write_csv(errored_tofs_path)
+        logger.error(
             f"{err} @ {patient_file}, writing filtered TOF to {errored_tofs_path} for closer inspection"
         )
-        if is_verbose:
-            print(traceback.format_exc())
-        tofs.write_csv(errored_tofs_path)
+        if logger.level == logging.DEBUG:
+            logger.error(traceback.format_exc())
 
 
 def main():
@@ -790,23 +815,38 @@ def main():
         )
     )
 
+    logger = logging.getLogger(__name__)
+    logger.setLevel(verbosity_to_error_level(cli_args.verbose))
+    logging_terminal_handler = logging.StreamHandler()
+    logger.addHandler(logging_terminal_handler)
+
     # Starts a "browser" in background to speed up image generation with Plotly (pl.Figure().write_image())
     kaleido.start_sync_server(width=1920, height=800)
 
     for patient_file in patient_files:
+        base_result_path = cli_args.result_folder.joinpath(patient_file.stem)
+
+        # setup log file for this patient file
+        log_file = base_result_path.with_suffix(".log")
+        logger.info("Logging to %s", log_file)
+        logging_file_handler = logging.FileHandler(log_file, encoding="utf-8", mode="w")
+        logger.addHandler(logging_file_handler)
+
         try:
             process_patient_file(
                 patient_file,
                 med_administration,
-                cli_args.result_folder,
+                base_result_path,
                 patiend_id_regex,
                 cli_args.merge_threshold,
-                cli_args.verbose,
+                logger,
             )
         except BaseException as err:
-            print(f"{err} @ {patient_file}")
+            logger.error(f"{err} @ {patient_file}")
             if cli_args.verbose:
-                print(traceback.format_exc())
+                logger.error(traceback.format_exc())
+
+        logger.removeHandler(logging_file_handler)
 
     kaleido.stop_sync_server()
 
