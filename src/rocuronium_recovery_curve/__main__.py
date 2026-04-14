@@ -65,10 +65,12 @@ AMPLITUDE_COL: str = "amplitude"
 NORMALIZED_AMPLITUDE_COL: str = "normalized_amplitude"
 GAUSSIAN_SIGNAL_SMOOTHING_COL: str = "gaussian_signal_smoothing"
 GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL: str = "gaussian_signal_smoothing_slope"
-GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL: str = (
-    "gaussian_signal_smoothing_slope_intervals"
+GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL: str = (
+    "gaussian_signal_smoothing_slope_intervals_id"
 )
 TOF_COUNT_COL: str = "tof_count"
+IS_RECOVERY_COL: str = "is_recovery"
+TMP_SIGN_COL: str = "tmp_sign"
 
 
 # New columns for MA
@@ -82,6 +84,9 @@ CB_BLUISH_GREEN = "rgb(0,158,115)"
 CB_BLUE = "rgb(0,114,178)"
 CB_VERMILLION = "rgb(213,94,0)"
 CB_REDDISH_PURPLE = "rgb(204, 121, 167)"
+
+# constants
+DEFAULT_AMPLITUDE_CHANGE_RATIO_THRESHOLD_FOR_MERGING: float = 0.1
 
 
 def cli() -> argparse.Namespace:
@@ -120,6 +125,17 @@ def cli() -> argparse.Namespace:
         default=False,
         action="store_true",
         help="Prints traceback on error for easier debugging",
+    )
+
+    parser.add_argument(
+        "-t",
+        "--merge-threshold",
+        type=float,
+        default=DEFAULT_AMPLITUDE_CHANGE_RATIO_THRESHOLD_FOR_MERGING,
+        help=(
+            "Amplitude merge threshold for merging subsequent negative slope intervals with recovery. "
+            "If the amplitude change of the negative slope interval is smaller than this ratio of the previous positive slope interval, it gets merged into the recovery curve."
+        ),
     )
 
     return parser.parse_args()
@@ -250,7 +266,11 @@ def load_medication_administration(
     return medication_administration
 
 
-def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
+def siginal_smoothing(
+    first_tofs_above_zero: pl.DataFrame,
+    fig: pgo.Figure,
+    interval_merge_threshold: float,
+):
     """
     Applies signal smoothing to the recovery curve and calculates the intervals with increasing slope.
 
@@ -260,6 +280,9 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
         A DataFrame containing the first TOF events with amplitude above zero
     fig : pgo.Figure
         The plotly figure to which the smoothed signal and intervals will be added
+    interval_merge_threshold : float
+        Amplitude change threshold for merging subsequent negative slope intervals with recovery.
+        If the amplitude change of the negative slope interval is smaller than this ratio of the previous positive
     """
 
     if first_tofs_above_zero.height == 0:
@@ -284,33 +307,113 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
         pl.Series(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL, gaussian_signal_smoothing_slope),
     )
 
-    # Positive value filter/expression for gaussian smoothing
-    pos_filter = pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) >= 0
-    # Find positive value with no positive value before, i.e. the start of a positive derivate
-    start_pos = pos_filter & (~pos_filter.shift(1).fill_null(False))
+    # Create a running ID for all intervals with consecutive pos or neg values (0 == pos)
+    first_tofs_above_zero = (
+        first_tofs_above_zero.with_columns(
+            pl.when(pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) >= 0)
+            .then(1)
+            .otherwise(-1)
+            .alias(TMP_SIGN_COL)
+        )
+        .with_columns(
+            (pl.col(TMP_SIGN_COL) != pl.col(TMP_SIGN_COL).shift(1))
+            .fill_null(True)
+            .cast(pl.Int64)  # Convert boolean (True/False) to 1/0
+            .cum_sum()  # Cumulative sum creates the running ID
+            .alias(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL),
+        )
+        .drop(TMP_SIGN_COL)
+    )
 
-    # Create a running ID for all intervals with consecutive pos/neg values
+    # Next we merge recovery intervals (positive slope) with subsequent negative intervals if the negative interval changes by MERGE_WITH_RECOVERY_RATIO_THRESHOLD less
+    # Create a new boolean column to indicate recovery curves (mostly positive slope with occasional negative slope)
     first_tofs_above_zero = first_tofs_above_zero.with_columns(
-        start_pos.cast(pl.Int64)
-        .cum_sum()
-        .alias(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL)
+        pl.when(pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) >= 0)
+        .then(True)
+        .otherwise(False)
+        .alias(IS_RECOVERY_COL)
     )
 
-    # Select positive gaussian derivate
-    first_tofs_above_zero_pos_slope = first_tofs_above_zero.filter(
-        pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) > 0
-    )
+    has_merged_intervals = True
+    while has_merged_intervals:
+        slope_intervals: List[Tuple[int, pl.DataFrame]] = [
+            (interval_id[0], interval)
+            for interval_id, interval in first_tofs_above_zero.group_by(
+                GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL
+            )
+        ]
+        slope_intervals.sort(key=lambda i: i[0])
+
+        has_merged_intervals = False
+        for interval_index, (interval_id, interval) in enumerate(slope_intervals[:-1]):
+            if not interval[IS_RECOVERY_COL].first():
+                # skip intervals which are not part of the recovery
+                continue
+
+            # get subsequent interval
+            next_interval_id, next_interval = slope_intervals[interval_index + 1]
+
+            # calc change of this intervals
+            interval_change = (
+                interval[AMPLITUDE_COL].max() - interval[AMPLITUDE_COL].min()
+            )
+
+            if interval_change == 0:
+                continue
+
+            merge_with_next = True
+
+            # Check if the next interval is not part of the recovery (negative slope)
+            if not next_interval[IS_RECOVERY_COL].first():
+                # calc change of next interval
+                next_interval_change = abs(
+                    next_interval[AMPLITUDE_COL].max()
+                    - next_interval[AMPLITUDE_COL].min()
+                )
+
+                merge_with_next = (
+                    next_interval_change / interval_change <= interval_merge_threshold
+                )
+
+            if merge_with_next:
+                # merge intervals by setting recovery curve to true ...
+                first_tofs_above_zero = first_tofs_above_zero.with_columns(
+                    pl.when(
+                        pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL)
+                        == next_interval_id
+                    )
+                    .then(True)
+                    .otherwise(pl.col(IS_RECOVERY_COL))
+                    .alias(IS_RECOVERY_COL)
+                )
+
+                # and the interval ID to the same for both intervals
+                first_tofs_above_zero = first_tofs_above_zero.with_columns(
+                    pl.when(
+                        pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL)
+                        == next_interval_id
+                    )
+                    .then(interval_id)
+                    .otherwise(pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL))
+                    .alias(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL)
+                )
+
+                has_merged_intervals = True
+
+                # start from the beginning
+                break
+
+    # Select recoveries
+    recoveries = first_tofs_above_zero.filter(pl.col(IS_RECOVERY_COL))
 
     # Group interval
-    pos_slope_intervals: List[Tuple[Tuple[int], pl.DataFrame]] = list(
-        iter(
-            first_tofs_above_zero_pos_slope.group_by(
-                GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_COL
-            )
+    recovery_interval: List[Tuple[int, pl.DataFrame]] = [
+        (interval_id[0], interval)
+        for interval_id, interval in recoveries.group_by(
+            GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL
         )
-    )
-
-    pos_slope_intervals.sort(key=lambda g: g[0][0])
+    ]
+    recovery_interval.sort(key=lambda g: g[0])
 
     fig.add_scatter(
         x=first_tofs_above_zero[ELAPSED_SEC_COL].to_list(),
@@ -321,7 +424,7 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
         visible="legendonly",
     )
 
-    for name, interval in pos_slope_intervals:
+    for interval_id, interval in recovery_interval:
         median_slope = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
         offset = interval[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
 
@@ -357,7 +460,7 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
             text=interval["Elapsed time (hh:mm:ss)"].to_list(),
             mode="lines",
             line=dict(color=CB_BLUISH_GREEN),
-            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({name[0]})",
+            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id})",
         )
 
         fig.add_scatter(
@@ -369,7 +472,7 @@ def siginal_smoothing(first_tofs_above_zero: pl.DataFrame, fig: pgo.Figure):
             mode="lines",
             line_dash="dot",
             line=dict(color=CB_VERMILLION),
-            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({name[0]}) median",
+            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) median",
         )
 
 
@@ -378,6 +481,7 @@ def process_patient_file(
     med_administration: Optional[pl.DataFrame],
     result_folder: Path,
     patiend_id_regex: re.Pattern,
+    interval_merge_threshold: float,
     is_verbose: bool,
 ):
     """
@@ -393,6 +497,9 @@ def process_patient_file(
         The path to the folder where the resulting plot and filtered data will be saved.
     patiend_id_regex : Path
         A compiled regular expression used to extract the patient ID from the patient file name.
+    interval_merge_threshold : float
+        Amplitude change threshold for merging subsequent negative slope intervals with recovery.
+        If the amplitude change of the negative slope interval is smaller than this ratio of the previous positive slope interval, it gets merged into the recovery curve.
     is_verbose : bool
         If True, prints detailed error messages and tracebacks for debugging purposes.
     """
@@ -548,7 +655,7 @@ def process_patient_file(
             )
 
     try:
-        siginal_smoothing(first_tofs_above_zero, fig)
+        siginal_smoothing(first_tofs_above_zero, fig, interval_merge_threshold)
     except BaseException as err:
         filtered_tofs_path = base_result_path.with_suffix(".tofs.csv")
         print(
@@ -617,6 +724,7 @@ def main():
                 med_administration,
                 cli_args.result_folder,
                 patiend_id_regex,
+                cli_args.merge_threshold,
                 cli_args.verbose,
             )
         except BaseException as err:
