@@ -266,7 +266,7 @@ def load_medication_administration(
     return medication_administration
 
 
-def siginal_smoothing(
+def siginal_processing(
     first_tofs_above_zero: pl.DataFrame,
     fig: pgo.Figure,
     interval_merge_threshold: float,
@@ -655,7 +655,7 @@ def process_patient_file(
             )
 
     try:
-        siginal_smoothing(first_tofs_above_zero, fig, interval_merge_threshold)
+        siginal_processing(first_tofs_above_zero, fig, interval_merge_threshold)
     except BaseException as err:
         filtered_tofs_path = base_result_path.with_suffix(".tofs.csv")
         print(
