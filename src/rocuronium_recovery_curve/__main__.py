@@ -481,8 +481,7 @@ def interval_processing(
 
 
 def plot_processed_data(
-    data: pl.DataFrame,
-    fig: pgo.Figure,
+    data: pl.DataFrame, fig: pgo.Figure, logger: logging.Logger
 ) -> pgo.Figure:
     """
     Plots the given data with Plotly, highlighting the recovery intervals
@@ -494,6 +493,8 @@ def plot_processed_data(
         and derived to get the slope for each data point and marked intervals.
     fig: pgo.Figure
         A Plotly figure to which the intervals should be added.
+    logger: logging.Logger
+        Logger
     """
 
     # Select recoveries
@@ -518,35 +519,6 @@ def plot_processed_data(
     )
 
     for interval_id, interval in recovery_interval:
-        median_slope = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
-        offset = interval[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
-
-        try:
-            median_line_x = np.array(
-                [interval[ELAPSED_SEC_COL].first(), interval[ELAPSED_SEC_COL].last()],
-                dtype=np.int64,
-            )
-        except Exception as err:
-            raise ValueError(f"Failed to convert median line x values to float: {err}")
-
-        if not isinstance(median_slope, float):
-            raise ValueError(
-                f"Median of slope is not a floating point numbers but {type(median_slope)}"
-            )
-
-        if not isinstance(offset, float):
-            raise ValueError(
-                f"Interval y-offset is not a floating point numbers but {type(offset)}"
-            )
-
-        median_line_y = np.array(
-            [
-                offset,  # median_slope * 0 + offset
-                median_slope * interval.height + offset,
-            ],
-            np.float64,
-        )
-
         fig.add_scatter(
             x=interval[ELAPSED_SEC_COL].to_list(),
             y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
@@ -556,16 +528,63 @@ def plot_processed_data(
             name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id})",
         )
 
+        slope_std = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].std()
+
+        if not isinstance(slope_std, float) and not isinstance(slope_std, int):
+            logger.error(
+                f"Slopes standard deviation is not float or int but {type(slope_std)}"
+            )
+            continue
+
+        max_slope = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].max()
+        if not isinstance(max_slope, float) and not isinstance(max_slope, int):
+            logger.error(f"Max slopes is not float or int but {type(max_slope)}")
+            continue
+
+        slope_threshold = max_slope - slope_std  # 3 sigma rule too loose
+
+        interval_in_slope_std = interval.filter(
+            pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) >= slope_threshold
+        )
+
         fig.add_scatter(
-            x=median_line_x,
-            y=median_line_y,
-            text=[
-                format(f"{i} (median slope = {median_slope})") for i in median_line_x
-            ],
+            x=interval_in_slope_std[ELAPSED_SEC_COL],
+            y=interval_in_slope_std[GAUSSIAN_SIGNAL_SMOOTHING_COL],
             mode="lines",
             line_dash="dot",
-            line=dict(color=CB_VERMILLION),
-            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) median",
+            line=dict(color=CB_REDDISH_PURPLE),
+            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) >= slope std",
+        )
+
+        interval_in_slope_std_mean = interval_in_slope_std[
+            GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL
+        ].median()
+
+        offset = interval_in_slope_std[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
+
+        marker_line_x = np.array(
+            [
+                interval_in_slope_std[ELAPSED_SEC_COL].first(),
+                interval_in_slope_std[ELAPSED_SEC_COL].last(),
+            ],
+            dtype=np.int64,
+        )
+
+        marker_line_y = np.array(
+            [
+                offset,
+                interval_in_slope_std_mean * interval_in_slope_std.height + offset,
+            ],
+            np.float64,
+        )
+
+        fig.add_scatter(
+            x=marker_line_x,
+            y=marker_line_y,
+            mode="lines",
+            line_dash="dash",
+            line=dict(color="red"),
+            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) >= stable slope marker",
         )
 
     return fig
@@ -753,7 +772,7 @@ def process_patient_file(
         first_tofs_above_zero = interval_processing(
             first_tofs_above_zero, interval_merge_threshold
         )
-        fig = plot_processed_data(first_tofs_above_zero, fig)
+        fig = plot_processed_data(first_tofs_above_zero, fig, logger)
 
         fig.write_html(base_result_path.with_suffix(".html"))
         fig.write_image(base_result_path.with_suffix(".png"), width=1920, height=800)
@@ -847,6 +866,7 @@ def main():
                 logger.error(traceback.format_exc())
 
         logger.removeHandler(logging_file_handler)
+        logging_file_handler.flush()
 
     kaleido.stop_sync_server()
 
