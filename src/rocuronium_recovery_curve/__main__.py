@@ -515,7 +515,7 @@ def plot_processed_data(
     #     visible="legendonly",
     # )
 
-    for interval_id, interval in recovery_interval:
+    for idx_for_label, (interval_id, interval) in enumerate(recovery_interval):
         # fig.add_scatter(
         #     x=interval[ELAPSED_SEC_COL].to_list(),
         #     y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
@@ -581,7 +581,7 @@ def plot_processed_data(
             mode="lines",
             line_dash="dash",
             line=dict(color=BLACK),
-            name="stable slope",
+            name=f"interval: {idx_for_label + 1}; slope (mean) {interval_in_slope_std_mean}",
         )
 
     return fig
