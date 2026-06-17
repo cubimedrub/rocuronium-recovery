@@ -36,12 +36,10 @@ RC_HEADER_ROW: int = 1
 MA_CASE_ID_COL: str = "caseid"
 MA_TIME: str = "chartTime"
 MA_MED: str = "medi"
+MA_DOSE: str = "dose"
+MA_DOSE_UNIT: str = "unit"
 
-MA_COLS: Tuple[str, ...] = (
-    MA_CASE_ID_COL,
-    MA_TIME,
-    MA_MED,
-)
+MA_COLS: Tuple[str, ...] = (MA_CASE_ID_COL, MA_TIME, MA_MED, MA_DOSE, MA_DOSE_UNIT)
 
 MA_SHEET_NAME: str = "Meds all"
 MA_HEADER_ROW: int = 0
@@ -50,6 +48,7 @@ MA_HEADER_ROW: int = 0
 
 PC_CASE_ID_COL: str = "caseid"
 PC_PATIENT_ID: str = "PateintenID"
+
 PC_COLS: Tuple[str, ...] = (
     PC_CASE_ID_COL,
     PC_PATIENT_ID,
@@ -754,14 +753,18 @@ def process_patient_file(
     if case_med_administration is not None and case_med_administration.height > 0:
         time_sec_col_idx = case_med_administration.columns.index(MA_TIME_SEC)
         med_col_idx = case_med_administration.columns.index(MA_MED)
+        med_dose_col_idx = case_med_administration.columns.index(MA_DOSE)
+        med_dose_unit_col_idx = case_med_administration.columns.index(MA_DOSE_UNIT)
         for row in case_med_administration.iter_rows():
-            label: str = row[med_col_idx]
+            med: str = row[med_col_idx][:2]
+            label: str = f"{med}: {row[med_dose_col_idx]} {row[med_dose_unit_col_idx]}"
             fig.add_vline(
                 row[time_sec_col_idx],
                 line_dash="dash",
                 line_color=LIGHT_GREY,
-                annotation_text=label[:2],
+                annotation_text=label,
                 annotation_position="top right",
+                annotation_textangle=-90,
             )
 
     try:
