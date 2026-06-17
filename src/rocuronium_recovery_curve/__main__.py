@@ -670,6 +670,9 @@ def process_patient_file(
     if tc == 0.0:
         raise ValueError("T_c is zero!")
 
+    tofs = tofs.filter(pl.col(AMPLITUDE_COL) <= tc)
+
+    # Agressive filtering of outliers
     tofs = tofs.with_columns(
         (pl.col(AMPLITUDE_COL) / tc).alias(NORMALIZED_AMPLITUDE_COL)
     )
