@@ -569,12 +569,15 @@ def plot_processed_data(
 
         offset = interval_in_slope_std[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
 
-        marker_line_x = np.array(
-            [
-                interval_in_slope_std[ELAPSED_SEC_COL].first(),
-                interval_in_slope_std[ELAPSED_SEC_COL].last(),
-            ],
-            dtype=np.int64,
+        marker_line_x = (
+            np.array(
+                [
+                    interval_in_slope_std[ELAPSED_SEC_COL].first(),
+                    interval_in_slope_std[ELAPSED_SEC_COL].last(),
+                ],
+                dtype=np.int64,
+            )
+            / 60
         )
 
         marker_line_y = np.array(
@@ -732,7 +735,7 @@ def process_patient_file(
 
     fig = pgo.Figure()
     fig.update_layout(
-        xaxis=dict(title=dict(text="seconds")),
+        xaxis=dict(title=dict(text="minutes")),
         yaxis=dict(title=dict(text="amplitude")),
     )
 
@@ -747,7 +750,7 @@ def process_patient_file(
     # )
 
     fig.add_scatter(
-        x=first_tofs_above_zero[ELAPSED_SEC_COL].to_list(),
+        x=[s / 60 for s in first_tofs_above_zero[ELAPSED_SEC_COL].to_list()],
         y=first_tofs_above_zero[NORMALIZED_AMPLITUDE_COL].to_list(),
         text=first_tofs["Elapsed time (hh:mm:ss)"].to_list(),
         mode="lines",
@@ -773,7 +776,7 @@ def process_patient_file(
             med: str = row[med_col_idx][:2]
             label: str = f"{med}: {row[med_dose_col_idx]} {row[med_dose_unit_col_idx]}"
             fig.add_vline(
-                row[time_sec_col_idx],
+                row[time_sec_col_idx] / 60,
                 line_dash="dash",
                 line_color=LIGHT_GREY,
                 annotation_text=label,
