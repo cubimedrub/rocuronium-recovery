@@ -164,6 +164,16 @@ def verbosity_to_error_level(verbosity: int) -> int:
         return logging.DEBUG
 
 
+def _as_float(val: object) -> float:
+    """
+    Small helper to make sure a value returned by Polars is actually a float.
+    This is mostly done to make the typechecker happy as the hughe union typehint
+    provided by Polars is not usable.
+    """
+    assert isinstance(val, (int, float))
+    return float(val)
+
+
 def hms_to_seconds(hms: str) -> int:
     """
     Converts a hours:minutes:seconds string into seconds.
@@ -425,8 +435,8 @@ def interval_processing(
             next_interval_id, next_interval = slope_intervals[interval_index + 1]
 
             # calc change of this intervals
-            interval_change = (
-                interval[AMPLITUDE_COL].max() - interval[AMPLITUDE_COL].min()
+            interval_change = _as_float(interval[AMPLITUDE_COL].max()) - _as_float(
+                interval[AMPLITUDE_COL].min()
             )
 
             if interval_change == 0:
@@ -438,8 +448,8 @@ def interval_processing(
             if not next_interval[IS_RECOVERY_COL].first():
                 # calc change of next interval
                 next_interval_change = abs(
-                    next_interval[AMPLITUDE_COL].max()
-                    - next_interval[AMPLITUDE_COL].min()
+                    _as_float(next_interval[AMPLITUDE_COL].max())
+                    - _as_float(next_interval[AMPLITUDE_COL].min())
                 )
 
                 can_merge_with_next = (
@@ -570,7 +580,8 @@ def plot_processed_data(
         marker_line_y = np.array(
             [
                 offset,
-                interval_in_slope_std_mean * interval_in_slope_std.height + offset,
+                _as_float(interval_in_slope_std_mean) * interval_in_slope_std.height
+                + _as_float(offset),
             ],
             np.float64,
         )
