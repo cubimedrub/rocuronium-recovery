@@ -80,11 +80,9 @@ MA_PATIENT_ID_COL = "patient_id"
 
 
 # Some colorblind-friendly colors according to Wong https://www.nature.com/articles/nmeth.1618
-CB_BLACK = "rgb(0,0,0)"
-CB_BLUISH_GREEN = "rgb(0,158,115)"
-CB_BLUE = "rgb(0,114,178)"
-CB_VERMILLION = "rgb(213,94,0)"
-CB_REDDISH_PURPLE = "rgb(204, 121, 167)"
+BLACK = "rgb(0, 0, 0)"
+DARK_GREY = "rgb(169, 169, 169)"
+LIGHT_GREY = "rgb(211, 211, 211)"
 
 # constants
 DEFAULT_AMPLITUDE_CHANGE_RATIO_THRESHOLD_FOR_MERGING: float = 0.1
@@ -509,24 +507,24 @@ def plot_processed_data(
     ]
     recovery_interval.sort(key=lambda g: g[0])
 
-    fig.add_scatter(
-        x=data[ELAPSED_SEC_COL].to_list(),
-        y=data[GAUSSIAN_SIGNAL_SMOOTHING_COL],
-        text=data["Elapsed time (hh:mm:ss)"].to_list(),
-        mode="lines",
-        name="gaussian smoothed norm. TOF ampl. (> 0)",
-        visible="legendonly",
-    )
+    # fig.add_scatter(
+    #     x=data[ELAPSED_SEC_COL].to_list(),
+    #     y=data[GAUSSIAN_SIGNAL_SMOOTHING_COL],
+    #     text=data["Elapsed time (hh:mm:ss)"].to_list(),
+    #     mode="lines",
+    #     name="gaussian smoothed norm. TOF ampl. (> 0)",
+    #     visible="legendonly",
+    # )
 
     for interval_id, interval in recovery_interval:
-        fig.add_scatter(
-            x=interval[ELAPSED_SEC_COL].to_list(),
-            y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
-            text=interval["Elapsed time (hh:mm:ss)"].to_list(),
-            mode="lines",
-            line=dict(color=CB_BLUISH_GREEN),
-            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id})",
-        )
+        # fig.add_scatter(
+        #     x=interval[ELAPSED_SEC_COL].to_list(),
+        #     y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
+        #     text=interval["Elapsed time (hh:mm:ss)"].to_list(),
+        #     mode="lines",
+        #     line=dict(color=CB_BLUISH_GREEN),
+        #     name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id})",
+        # )
 
         slope_std = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].std()
 
@@ -547,14 +545,14 @@ def plot_processed_data(
             pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) >= slope_threshold
         )
 
-        fig.add_scatter(
-            x=interval_in_slope_std[ELAPSED_SEC_COL],
-            y=interval_in_slope_std[GAUSSIAN_SIGNAL_SMOOTHING_COL],
-            mode="lines",
-            line_dash="dot",
-            line=dict(color=CB_REDDISH_PURPLE),
-            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) >= slope std",
-        )
+        # fig.add_scatter(
+        #     x=interval_in_slope_std[ELAPSED_SEC_COL],
+        #     y=interval_in_slope_std[GAUSSIAN_SIGNAL_SMOOTHING_COL],
+        #     mode="lines",
+        #     line_dash="dot",
+        #     line=dict(color=CB_REDDISH_PURPLE),
+        #     name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) >= slope std",
+        # )
 
         interval_in_slope_std_mean = interval_in_slope_std[
             GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL
@@ -583,8 +581,8 @@ def plot_processed_data(
             y=marker_line_y,
             mode="lines",
             line_dash="dash",
-            line=dict(color="red"),
-            name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) >= stable slope marker",
+            line=dict(color=BLACK),
+            name="stable slope",
         )
 
     return fig
@@ -725,31 +723,30 @@ def process_patient_file(
         yaxis=dict(title=dict(text="amplitude")),
     )
 
-    fig.add_scatter(
-        x=first_tofs[ELAPSED_SEC_COL].to_list(),
-        y=first_tofs[NORMALIZED_AMPLITUDE_COL].to_list(),
-        text=first_tofs["Elapsed time (hh:mm:ss)"].to_list(),
-        mode="lines",
-        line=dict(color=CB_BLACK),
-        name="norm. TOF ampl.",
-        visible="legendonly",
-    )
+    # fig.add_scatter(
+    #     x=first_tofs[ELAPSED_SEC_COL].to_list(),
+    #     y=first_tofs[NORMALIZED_AMPLITUDE_COL].to_list(),
+    #     text=first_tofs["Elapsed time (hh:mm:ss)"].to_list(),
+    #     mode="lines",
+    #     line=dict(color=CB_BLACK),
+    #     name="norm. TOF ampl.",
+    #     visible="legendonly",
+    # )
 
     fig.add_scatter(
         x=first_tofs_above_zero[ELAPSED_SEC_COL].to_list(),
         y=first_tofs_above_zero[NORMALIZED_AMPLITUDE_COL].to_list(),
         text=first_tofs["Elapsed time (hh:mm:ss)"].to_list(),
         mode="lines",
-        line=dict(color=CB_BLUE),
-        name="norm. TOF ampl. > 0",
-        visible="legendonly",
+        line=dict(color=DARK_GREY),
+        name="norm. TOF ampl. filtered",
     )
 
     for percentage in range(25, 101, 25):
         fig.add_hline(
             percentage / 100,
             line_dash="dash",
-            line_color="gray",
+            line_color=LIGHT_GREY,
             annotation_text=f"{percentage}%",
             annotation_position="top right",
         )
@@ -762,7 +759,7 @@ def process_patient_file(
             fig.add_vline(
                 row[time_sec_col_idx],
                 line_dash="dash",
-                line_color="red",
+                line_color=LIGHT_GREY,
                 annotation_text=label[:2],
                 annotation_position="top right",
             )
