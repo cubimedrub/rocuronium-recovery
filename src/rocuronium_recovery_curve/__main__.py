@@ -885,6 +885,7 @@ def process_patient_file(
     fig.update_layout(
         xaxis=dict(title=dict(text="minutes")),
         yaxis=dict(title=dict(text="amplitude")),
+        title=dict(text=f"{base_result_path.name}"),
     )
 
     # fig.add_scatter(
