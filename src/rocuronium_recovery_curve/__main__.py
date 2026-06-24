@@ -77,6 +77,20 @@ TMP_SIGN_COL: str = "tmp_sign"
 MA_TIME_SEC = "chartTimeSec"
 MA_PATIENT_ID_COL = "patient_id"
 
+# Summary columns SU_MEDICATION_ORIGINAL_TIME: str = "medication_original_time"
+SU_MEDICATION_ORIGINAL_TIME: str = "medication_original_time"
+SU_MEDICATION_NAME: str = "medication_name"
+SU_MEDICATION_DOSE: str = "medication_dose"
+SU_MEDICATION_UNIT: str = "medication_unit"
+SU_MEDICATION_TIME_DIFF = "medication_time_diff"
+
+SU_INTERVAL_START_TIME = "interval_start_time"
+SU_INTERVAL_END_TIME = "interval_end_time"
+SU_INTERVAL_SLOPE_MEAN = "interval_slope_mean"
+SU_INTERVAL_SLOPE_MAX = "interval_slope_max"
+SU_INTERVAL_SLOPE_STD = "interval_slope_std"
+SU_INTERVAL_TIME_TO_NEXT = "interval_time_to_next"
+
 
 # Some colorblind-friendly colors according to Wong https://www.nature.com/articles/nmeth.1618
 BLACK = "rgb(0, 0, 0)"
@@ -172,6 +186,16 @@ def _as_float(val: object) -> float:
     """
     assert isinstance(val, (int, float))
     return float(val)
+
+
+def _as_int(val: object) -> int:
+    """
+    Small helper to make sure a value returned by Polars is actually a int.
+    This is mostly done to make the typechecker happy as the hughe union typehint
+    provided by Polars is not usable.
+    """
+    assert isinstance(val, int)
+    return int(val)
 
 
 def hms_to_seconds(hms: str) -> int:
@@ -488,8 +512,11 @@ def interval_processing(
 
 
 def plot_processed_data(
-    data: pl.DataFrame, fig: pgo.Figure, logger: logging.Logger
-) -> pgo.Figure:
+    data: pl.DataFrame,
+    case_med_administration: Optional[pl.DataFrame],
+    fig: pgo.Figure,
+    logger: logging.Logger,
+) -> Tuple[pgo.Figure, pl.DataFrame, pl.DataFrame]:
     """
     Plots the given data with Plotly, highlighting the recovery intervals
 
@@ -498,10 +525,17 @@ def plot_processed_data(
     data: pl.DataFrame
         A DataFrame containing the first TOF events with a normalized amplitude above zero which is smoothed
         and derived to get the slope for each data point and marked intervals.
+    case_med_administration: pl.DataFrame
+        A DataFrame containing the medication administration for the case, which can be used to add vertical lines to the plot.
     fig: pgo.Figure
         A Plotly figure to which the intervals should be added.
     logger: logging.Logger
         Logger
+
+    Returns
+    -------
+    (pgo.Figure, pl.DataFrame)
+        The given figure with the intervals added and the patient summary with interval information added.
     """
 
     # Select recoveries
@@ -525,7 +559,20 @@ def plot_processed_data(
     #     visible="legendonly",
     # )
 
-    for idx_for_label, (interval_id, interval) in enumerate(recovery_interval):
+    # Summary columns
+    medication_original_time: List[float] = []
+    medication_time_diff: List[float] = []
+    medication_name: List[str] = []
+    medication_dose: List[float] = []
+    medication_unit: List[str] = []
+    interval_start_time: List[int] = []
+    interval_end_time: List[int] = []
+    interval_slope_mean: List[float] = []
+    interval_slope_max: List[float] = []
+    interval_slope_std: List[float] = []
+    interval_time_to_next: List[float] = []
+
+    for interval_idx, (interval_id, interval) in enumerate(recovery_interval):
         # fig.add_scatter(
         #     x=interval[ELAPSED_SEC_COL].to_list(),
         #     y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
@@ -534,46 +581,44 @@ def plot_processed_data(
         #     line=dict(color=CB_BLUISH_GREEN),
         #     name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id})",
         # )
+        interval_start_time.append(_as_int(interval[ELAPSED_SEC_COL].first()))
+        interval_end_time.append(_as_int(interval[ELAPSED_SEC_COL].last()))
 
-        slope_std = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].std()
+        slope_std = _as_float(interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].std())
+        interval_slope_std.append(slope_std)
 
-        if not isinstance(slope_std, float) and not isinstance(slope_std, int):
-            logger.error(
-                f"Slopes standard deviation is not float or int but {type(slope_std)}"
-            )
-            continue
-
-        max_slope = interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].max()
-        if not isinstance(max_slope, float) and not isinstance(max_slope, int):
-            logger.error(f"Max slopes is not float or int but {type(max_slope)}")
-            continue
+        max_slope = _as_float(interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].max())
+        interval_slope_max.append(slope_std)
 
         slope_threshold = max_slope - slope_std  # 3 sigma rule too loose
 
-        interval_in_slope_std = interval.filter(
+        interval_in_slope_capped = interval.filter(
             pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL) >= slope_threshold
         )
 
         # fig.add_scatter(
-        #     x=interval_in_slope_std[ELAPSED_SEC_COL],
-        #     y=interval_in_slope_std[GAUSSIAN_SIGNAL_SMOOTHING_COL],
+        #     x=interval_in_slope_capped[ELAPSED_SEC_COL],
+        #     y=interval_in_slope_capped[GAUSSIAN_SIGNAL_SMOOTHING_COL],
         #     mode="lines",
         #     line_dash="dot",
         #     line=dict(color=CB_REDDISH_PURPLE),
         #     name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id}) >= slope std",
         # )
 
-        interval_in_slope_std_mean = interval_in_slope_std[
-            GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL
-        ].median()
+        interval_in_slope_capped_median = _as_float(
+            interval_in_slope_capped[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].median()
+        )
+        interval_slope_mean.append(interval_in_slope_capped_median)
 
-        offset = interval_in_slope_std[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
+        offset = _as_float(
+            interval_in_slope_capped[GAUSSIAN_SIGNAL_SMOOTHING_COL].min()
+        )
 
         marker_line_x = (
             np.array(
                 [
-                    interval_in_slope_std[ELAPSED_SEC_COL].first(),
-                    interval_in_slope_std[ELAPSED_SEC_COL].last(),
+                    interval_in_slope_capped[ELAPSED_SEC_COL].first(),
+                    interval_in_slope_capped[ELAPSED_SEC_COL].last(),
                 ],
                 dtype=np.int64,
             )
@@ -583,8 +628,8 @@ def plot_processed_data(
         marker_line_y = np.array(
             [
                 offset,
-                _as_float(interval_in_slope_std_mean) * interval_in_slope_std.height
-                + _as_float(offset),
+                interval_in_slope_capped_median * interval_in_slope_capped.height
+                + offset,
             ],
             np.float64,
         )
@@ -595,10 +640,113 @@ def plot_processed_data(
             mode="lines",
             line_dash="dash",
             line=dict(color=BLACK),
-            name=f"interval: {idx_for_label + 1}; slope (mean) {interval_in_slope_std_mean}",
+            name=f"interval: {interval_idx + 1}; slope (median) {interval_in_slope_capped_median}",
         )
 
-    return fig
+        if interval_idx < len(recovery_interval) - 1:
+            (_, next_interval) = recovery_interval[interval_idx + 1]
+            time_to_next = _as_float(
+                next_interval[ELAPSED_SEC_COL].first()
+            ) - _as_float(interval[ELAPSED_SEC_COL].last())
+
+            interval_time_to_next.append(time_to_next / 60)
+
+            fig.add_shape(
+                type="line",
+                xref="x",
+                yref="paper",
+                x0=_as_float(interval[ELAPSED_SEC_COL].last()) / 60,
+                x1=_as_float(next_interval[ELAPSED_SEC_COL].first()) / 60,
+                y0=0.0,
+                y1=0.0,
+                line=dict(
+                    color="MediumPurple",
+                    width=4,
+                    dash="dot",
+                ),
+            )
+
+            time_to_next_midpoint = (
+                _as_float(interval[ELAPSED_SEC_COL].last()) + time_to_next / 2
+            ) / 60
+            label_y = 0.05 if interval_idx % 2 == 0 else 0.1
+            fig.add_scatter(
+                x=[time_to_next_midpoint],
+                y=[label_y],
+                text=[f"{round(time_to_next / 60, 2)} min"],
+                mode="text",
+                textfont=dict(color="MediumPurple"),
+                showlegend=False,
+            )
+
+        else:
+            interval_time_to_next.append(0.0)
+
+        if case_med_administration is not None and case_med_administration.height > 0:
+            medcation = case_med_administration.filter(
+                (pl.col(MA_TIME_SEC) >= interval[ELAPSED_SEC_COL].first())
+                & (pl.col(MA_TIME_SEC) <= interval[ELAPSED_SEC_COL].last())
+            )
+
+            if medcation.height > 0:
+                time_sec_col_idx = case_med_administration.columns.index(MA_TIME_SEC)
+                med_col_idx = case_med_administration.columns.index(MA_MED)
+                med_dose_col_idx = case_med_administration.columns.index(MA_DOSE)
+                med_dose_unit_col_idx = case_med_administration.columns.index(
+                    MA_DOSE_UNIT
+                )
+
+                for row in medcation.iter_rows():
+                    med: str = row[med_col_idx][:2]
+                    label: str = (
+                        f"{med}: {row[med_dose_col_idx]} {row[med_dose_unit_col_idx]}"
+                    )
+
+                    medication_original_time.append(
+                        _as_float(row[time_sec_col_idx]) / 60
+                    )
+                    medication_time_diff.append(
+                        (
+                            _as_float(interval_in_slope_capped[ELAPSED_SEC_COL].last())
+                            - _as_float(row[time_sec_col_idx])
+                        )
+                        / 60
+                    )
+                    medication_name.append(row[med_col_idx])
+                    medication_dose.append(row[med_dose_col_idx])
+                    medication_unit.append(row[med_dose_unit_col_idx])
+
+                    fig.add_vline(
+                        _as_float(interval[ELAPSED_SEC_COL].last()) / 60,
+                        line_dash="dash",
+                        line_color=LIGHT_GREY,
+                        annotation_text=label,
+                        annotation_position="top right",
+                        annotation_textangle=-90,
+                    )
+
+    patient_interval_summary = pl.DataFrame(
+        {
+            SU_INTERVAL_START_TIME: interval_start_time,
+            SU_INTERVAL_END_TIME: interval_end_time,
+            SU_INTERVAL_SLOPE_MEAN: interval_slope_mean,
+            SU_INTERVAL_SLOPE_MAX: interval_slope_max,
+            SU_INTERVAL_SLOPE_STD: interval_slope_std,
+            SU_INTERVAL_TIME_TO_NEXT: interval_time_to_next,
+        }
+    )
+
+    patient_medication_summery = pl.DataFrame(
+        {
+            SU_MEDICATION_ORIGINAL_TIME: medication_original_time,
+            SU_MEDICATION_TIME_DIFF: medication_time_diff,
+            SU_MEDICATION_NAME: medication_name,
+            SU_MEDICATION_DOSE: medication_dose,
+            SU_MEDICATION_UNIT: medication_unit,
+        }
+    )
+
+    return (fig, patient_interval_summary, patient_medication_summery)
 
 
 def process_patient_file(
@@ -767,34 +915,46 @@ def process_patient_file(
             annotation_position="top right",
         )
 
-    if case_med_administration is not None and case_med_administration.height > 0:
-        time_sec_col_idx = case_med_administration.columns.index(MA_TIME_SEC)
-        med_col_idx = case_med_administration.columns.index(MA_MED)
-        med_dose_col_idx = case_med_administration.columns.index(MA_DOSE)
-        med_dose_unit_col_idx = case_med_administration.columns.index(MA_DOSE_UNIT)
-        for row in case_med_administration.iter_rows():
-            med: str = row[med_col_idx][:2]
-            label: str = f"{med}: {row[med_dose_col_idx]} {row[med_dose_unit_col_idx]}"
-            fig.add_vline(
-                row[time_sec_col_idx] / 60,
-                line_dash="dash",
-                line_color=LIGHT_GREY,
-                annotation_text=label,
-                annotation_position="top right",
-                annotation_textangle=-90,
-            )
+    # if case_med_administration is not None and case_med_administration.height > 0:
+    #     time_sec_col_idx = case_med_administration.columns.index(MA_TIME_SEC)
+    #     med_col_idx = case_med_administration.columns.index(MA_MED)
+    #     med_dose_col_idx = case_med_administration.columns.index(MA_DOSE)
+    #     med_dose_unit_col_idx = case_med_administration.columns.index(MA_DOSE_UNIT)
+    #     for row in case_med_administration.iter_rows():
+    #         med: str = row[med_col_idx][:2]
+    #         label: str = f"{med}: {row[med_dose_col_idx]} {row[med_dose_unit_col_idx]}"
+    #         fig.add_vline(
+    #             row[time_sec_col_idx] / 60,
+    #             line_dash="dash",
+    #             line_color=LIGHT_GREY,
+    #             annotation_text=label,
+    #             annotation_position="top right",
+    #             annotation_textangle=-90,
+    #         )
 
     try:
         first_tofs_above_zero = siginal_processing(first_tofs_above_zero)
         first_tofs_above_zero = interval_processing(
             first_tofs_above_zero, interval_merge_threshold
         )
-        fig = plot_processed_data(first_tofs_above_zero, fig, logger)
+        (fig, patient_recovery_summary, patient_medication_summary) = (
+            plot_processed_data(
+                first_tofs_above_zero, case_med_administration, fig, logger
+            )
+        )
 
         fig.write_html(base_result_path.with_suffix(".html"))
         fig.write_image(base_result_path.with_suffix(".png"), width=1920, height=800)
         processed_tofs_path = base_result_path.with_suffix(".processed.tofs.csv")
         first_tofs_above_zero.write_csv(processed_tofs_path)
+        recovery_summary_path = base_result_path.with_suffix(
+            ".revocery_summary.tofs.tsv"
+        )
+        patient_recovery_summary.write_csv(recovery_summary_path, separator="\t")
+        medication_summary_path = base_result_path.with_suffix(
+            ".medication_summary.tofs.tsv"
+        )
+        patient_medication_summary.write_csv(medication_summary_path, separator="\t")
 
     except BaseException as err:
         errored_tofs_path = base_result_path.with_suffix(".errored.tofs.csv")
