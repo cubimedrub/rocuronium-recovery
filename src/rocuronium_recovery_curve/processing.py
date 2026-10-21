@@ -3,6 +3,7 @@ Signal and interval processing: turns normalized TOF amplitudes into smoothed si
 recovery intervals. No file or CLI handling in here.
 """
 
+from dataclasses import dataclass
 from typing import List, Tuple
 
 import numpy as np
@@ -231,3 +232,55 @@ def interval_processing(
                 break
 
     return data
+
+
+@dataclass(frozen=True)
+class IntervalStats:
+    """Recovery interval statistics for a (possibly user adjusted) time window."""
+
+    start_s: int
+    end_s: int
+    y_start: float
+    y_end: float
+    slope_per_min: float  # secant slope of the smoothed signal, amplitude / minute
+    slope_max: float  # per sample slope of the smoothed signal
+    slope_std: float
+
+
+def interval_stats(data: pl.DataFrame, start_s: float, end_s: float) -> IntervalStats:
+    """
+    Calculates the secant slope of the smoothed signal between the data points closest to start_s and end_s.
+
+    Parameters
+    ----------
+    data: pl.DataFrame
+        Processed TOF events (needs the elapsed seconds, smoothed signal and its slope).
+    start_s, end_s: float
+        Requested window in elapsed seconds. Snapped to the nearest data points.
+
+    Returns
+    -------
+    IntervalStats
+    """
+    times = data[ELAPSED_SEC_COL].to_numpy()
+    smoothed = data[GAUSSIAN_SIGNAL_SMOOTHING_COL].to_numpy()
+    slopes = data[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].to_numpy()
+
+    start_idx = int(np.argmin(np.abs(times - start_s)))
+    end_idx = int(np.argmin(np.abs(times - end_s)))
+    if start_idx > end_idx:
+        start_idx, end_idx = end_idx, start_idx
+
+    delta_min = float(times[end_idx] - times[start_idx]) / 60
+    delta_y = float(smoothed[end_idx] - smoothed[start_idx])
+    window_slopes = slopes[start_idx : end_idx + 1]
+
+    return IntervalStats(
+        start_s=int(times[start_idx]),
+        end_s=int(times[end_idx]),
+        y_start=float(smoothed[start_idx]),
+        y_end=float(smoothed[end_idx]),
+        slope_per_min=delta_y / delta_min if delta_min > 0 else 0.0,
+        slope_max=float(window_slopes.max()),
+        slope_std=float(window_slopes.std(ddof=1)) if window_slopes.size > 1 else 0.0,
+    )

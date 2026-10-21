@@ -51,8 +51,12 @@ Excel file with two worksheets, header on row 1 (row index 0):
 
 ## Usage
 
+Two subcommands: `calc` calculates the recovery curves, `review` adjusts the intervals afterwards.
+
+### `calc`
+
 ```sh
-python -m rocuronium_recovery_curve <patient_folder> <result_folder> [options]
+python -m rocuronium_recovery_curve calc <patient_folder> <result_folder> [options]
 ```
 
 Positional arguments:
@@ -70,7 +74,7 @@ Options:
 Example:
 
 ```sh
-python -m rocuronium_recovery_curve ./patients ./results --med-administration ./meds.xlsx -vv
+python -m rocuronium_recovery_curve calc ./patients ./results --med-administration ./meds.xlsx -vv
 ```
 
 ## Output
@@ -81,7 +85,25 @@ For each patient Excel file in `patient_folder`, the tool writes to `result_fold
 - `<patient>.processed.tofs.csv` — processed TOF data
 - `<patient>.revocery_summary.tofs.tsv` — per-interval recovery summary
 - `<patient>.medication_summary.tofs.tsv` — medication administrations matched to intervals
+- `<patient>.medication.csv` — synced medication administrations (only with `--med-administration`), used by the review app
+- `<patient>.intervals.json` — user adjusted interval start/end (only after saving in the review app)
 - `<patient>.log` — per-patient processing log
 
 If processing a patient file fails, the filtered TOF data is written to
 `<patient>.errored.tofs.csv` for inspection and the error is logged.
+
+In the recovery summary, `interval_slope_mean` is the secant slope of the smoothed signal between
+interval start and end in amplitude per minute (earlier versions: median per-sample slope).
+`interval_slope_max` and `interval_slope_std` are per-sample slope statistics within the interval.
+
+## Adjusting intervals interactively
+
+```sh
+python -m rocuronium_recovery_curve review <result_folder> [--port 8050]
+```
+
+Opens a local Dash app for the results in `result_folder`. Pick a patient, drag the orange start/end
+lines of an interval; the dashed marker line and its slope update live (start/end snap to the nearest
+measurement). **Save** writes `<patient>.intervals.json` and regenerates the summaries, HTML and PNG.
+Saved bounds are loaded the next time the patient is opened. Re-running the main CLI overwrites the
+summaries with the automatic intervals but keeps `.intervals.json`.
