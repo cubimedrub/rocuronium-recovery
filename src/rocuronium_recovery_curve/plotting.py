@@ -18,6 +18,7 @@ from rocuronium_recovery_curve.constants import (
     SU_INTERVAL_END_TIME,
     SU_INTERVAL_SLOPE_MAX,
     SU_INTERVAL_SLOPE_MEAN,
+    SU_INTERVAL_SLOPE_METHOD,
     SU_INTERVAL_SLOPE_STD,
     SU_INTERVAL_START_TIME,
     SU_INTERVAL_TIME_TO_NEXT,
@@ -26,16 +27,14 @@ from rocuronium_recovery_curve.constants import (
     SU_MEDICATION_ORIGINAL_TIME,
     SU_MEDICATION_TIME_DIFF,
     SU_MEDICATION_UNIT,
+    SU_SLOPE_WINDOW_END_TIME,
+    SU_SLOPE_WINDOW_START_TIME,
 )
 from rocuronium_recovery_curve.processing import (
     ELAPSED_SEC_COL,
-    GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL,
-    IS_RECOVERY_COL,
     NORMALIZED_AMPLITUDE_COL,
-    IntervalStats,
     _as_float,
-    _as_int,
-    interval_stats,
+    interval_entries,
 )
 
 
@@ -52,8 +51,9 @@ def plot_processed_data(
     Parameters
     ----------
     interval_bounds: Optional[Dict[int, Tuple[int, int]]]
-        User adjusted (start, end) in elapsed seconds per 1-based recovery interval number.
-        Intervals without an entry use their first and last data point.
+        User adjusted slope window (start, end) in elapsed seconds per 1-based recovery interval number.
+        Intervals changed by the user: slope between the two given points on the curve.
+        Intervals without an entry keep the initial slope (median slope of their steepest part).
     data: pl.DataFrame
         A DataFrame containing the first TOF events with a normalized amplitude above zero which is smoothed
         and derived to get the slope for each data point and marked intervals.
@@ -70,17 +70,7 @@ def plot_processed_data(
         The given figure with the intervals added and the patient summary with interval information added.
     """
 
-    # Select recoveries
-    recoveries = data.filter(pl.col(IS_RECOVERY_COL))
-
-    # Group interval
-    recovery_interval: List[Tuple[int, pl.DataFrame]] = [
-        (interval_id[0], interval)
-        for interval_id, interval in recoveries.group_by(
-            GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL
-        )
-    ]
-    recovery_interval.sort(key=lambda g: g[0])
+    entries = interval_entries(data, interval_bounds)
 
     # fig.add_scatter(
     #     x=data[ELAPSED_SEC_COL].to_list(),
@@ -99,21 +89,15 @@ def plot_processed_data(
     medication_unit: List[str] = []
     interval_start_time: List[int] = []
     interval_end_time: List[int] = []
+    slope_window_start_time: List[int] = []
+    slope_window_end_time: List[int] = []
     interval_slope_mean: List[float] = []
     interval_slope_max: List[float] = []
     interval_slope_std: List[float] = []
+    interval_slope_method: List[str] = []
     interval_time_to_next: List[float] = []
 
-    stats_per_interval: List[IntervalStats] = []
-    for interval_idx, (_, interval) in enumerate(recovery_interval):
-        default_start = _as_int(interval[ELAPSED_SEC_COL].first())
-        default_end = _as_int(interval[ELAPSED_SEC_COL].last())
-        start_s, end_s = (interval_bounds or {}).get(
-            interval_idx + 1, (default_start, default_end)
-        )
-        stats_per_interval.append(interval_stats(data, start_s, end_s))
-
-    for interval_idx in range(len(recovery_interval)):
+    for interval_idx, entry in enumerate(entries):
         # fig.add_scatter(
         #     x=interval[ELAPSED_SEC_COL].to_list(),
         #     y=interval[GAUSSIAN_SIGNAL_SMOOTHING_COL],
@@ -122,10 +106,15 @@ def plot_processed_data(
         #     line=dict(color=CB_BLUISH_GREEN),
         #     name=f"gaussian smoothed norm. TOF ampl. (> 0) pos slope ({interval_id})",
         # )
-        stats = stats_per_interval[interval_idx]
-        interval_start_time.append(stats.start_s)
-        interval_end_time.append(stats.end_s)
-        interval_slope_mean.append(stats.slope_per_min)
+        stats = entry.stats
+        extent_start_s = entry.extent_start_s
+        extent_end_s = entry.extent_end_s
+        interval_start_time.append(extent_start_s)
+        interval_end_time.append(extent_end_s)
+        slope_window_start_time.append(stats.start_s)
+        slope_window_end_time.append(stats.end_s)
+        interval_slope_mean.append(stats.slope)
+        interval_slope_method.append(stats.method)
         interval_slope_max.append(stats.slope_max)
         interval_slope_std.append(stats.slope_std)
 
@@ -135,12 +124,12 @@ def plot_processed_data(
             mode="lines",
             line_dash="dash",
             line=dict(color=BLACK),
-            name=f"interval: {interval_idx + 1}; slope {stats.slope_per_min:.4f} /min",
+            name=f"interval: {'+'.join(map(str, entry.members))}; slope ({stats.method}) {stats.slope}",
         )
 
-        if interval_idx < len(recovery_interval) - 1:
-            next_start_s = stats_per_interval[interval_idx + 1].start_s
-            time_to_next = float(next_start_s - stats.end_s)
+        if interval_idx < len(entries) - 1:
+            next_start_s = entries[interval_idx + 1].extent_start_s
+            time_to_next = float(max(next_start_s - extent_end_s, 0))
 
             interval_time_to_next.append(time_to_next / 60)
 
@@ -148,7 +137,7 @@ def plot_processed_data(
                 type="line",
                 xref="x",
                 yref="paper",
-                x0=stats.end_s / 60,
+                x0=extent_end_s / 60,
                 x1=next_start_s / 60,
                 y0=0.0,
                 y1=0.0,
@@ -159,7 +148,7 @@ def plot_processed_data(
                 ),
             )
 
-            time_to_next_midpoint = (stats.end_s + time_to_next / 2) / 60
+            time_to_next_midpoint = (extent_end_s + time_to_next / 2) / 60
             label_y = 0.05 if interval_idx % 2 == 0 else 0.1
             fig.add_scatter(
                 x=[time_to_next_midpoint],
@@ -175,8 +164,8 @@ def plot_processed_data(
 
         if case_med_administration is not None and case_med_administration.height > 0:
             medcation = case_med_administration.filter(
-                (pl.col(MA_TIME_SEC) >= stats.start_s)
-                & (pl.col(MA_TIME_SEC) <= stats.end_s)
+                (pl.col(MA_TIME_SEC) >= extent_start_s)
+                & (pl.col(MA_TIME_SEC) <= extent_end_s)
             )
 
             if medcation.height > 0:
@@ -197,14 +186,14 @@ def plot_processed_data(
                         _as_float(row[time_sec_col_idx]) / 60
                     )
                     medication_time_diff.append(
-                        (float(stats.end_s) - _as_float(row[time_sec_col_idx])) / 60
+                        (float(extent_end_s) - _as_float(row[time_sec_col_idx])) / 60
                     )
                     medication_name.append(row[med_col_idx])
                     medication_dose.append(row[med_dose_col_idx])
                     medication_unit.append(row[med_dose_unit_col_idx])
 
                     fig.add_vline(
-                        stats.end_s / 60,
+                        extent_end_s / 60,
                         line_dash="dash",
                         line_color=LIGHT_GREY,
                         annotation_text=label,
@@ -216,9 +205,12 @@ def plot_processed_data(
         {
             SU_INTERVAL_START_TIME: interval_start_time,
             SU_INTERVAL_END_TIME: interval_end_time,
+            SU_SLOPE_WINDOW_START_TIME: slope_window_start_time,
+            SU_SLOPE_WINDOW_END_TIME: slope_window_end_time,
             SU_INTERVAL_SLOPE_MEAN: interval_slope_mean,
             SU_INTERVAL_SLOPE_MAX: interval_slope_max,
             SU_INTERVAL_SLOPE_STD: interval_slope_std,
+            SU_INTERVAL_SLOPE_METHOD: interval_slope_method,
             SU_INTERVAL_TIME_TO_NEXT: interval_time_to_next,
         }
     )

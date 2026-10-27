@@ -60,10 +60,19 @@ SU_MEDICATION_TIME_DIFF = "medication_time_diff"
 
 SU_INTERVAL_START_TIME = "interval_start_time"
 SU_INTERVAL_END_TIME = "interval_end_time"
+SU_SLOPE_WINDOW_START_TIME = "slope_window_start_time"
+SU_SLOPE_WINDOW_END_TIME = "slope_window_end_time"
 SU_INTERVAL_SLOPE_MEAN = "interval_slope_mean"
 SU_INTERVAL_SLOPE_MAX = "interval_slope_max"
 SU_INTERVAL_SLOPE_STD = "interval_slope_std"
+SU_INTERVAL_SLOPE_METHOD = "interval_slope_method"
 SU_INTERVAL_TIME_TO_NEXT = "interval_time_to_next"
+
+# Optional columns added to the processed TOF data by the review app
+MANUAL_INTERVAL_ID_COL = "manual_interval_id"
+MANUAL_SLOPE_WINDOW_COL = "manual_slope_window"
+
+MANUAL_COLS: Tuple[str, ...] = (MANUAL_INTERVAL_ID_COL, MANUAL_SLOPE_WINDOW_COL)
 
 
 # Some colorblind-friendly colors according to Wong https://www.nature.com/articles/nmeth.1618

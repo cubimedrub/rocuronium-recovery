@@ -4,7 +4,7 @@ recovery intervals. No file or CLI handling in here.
 """
 
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import polars as pl
@@ -234,22 +234,72 @@ def interval_processing(
     return data
 
 
+INITIAL_SLOPE_METHOD = "initial"
+MANUAL_SLOPE_METHOD = "manual"
+
+
 @dataclass(frozen=True)
 class IntervalStats:
-    """Recovery interval statistics for a (possibly user adjusted) time window."""
+    """Slope of a recovery interval together with the line drawn for it."""
 
     start_s: int
     end_s: int
     y_start: float
     y_end: float
-    slope_per_min: float  # secant slope of the smoothed signal, amplitude / minute
+    slope: float  # initial: per sample; manual: per second (straight line between the two points)
     slope_max: float  # per sample slope of the smoothed signal
     slope_std: float
+    method: str  # INITIAL_SLOPE_METHOD or MANUAL_SLOPE_METHOD
+
+
+def _steepest_part(interval: pl.DataFrame) -> pl.DataFrame:
+    """
+    Rows of the interval whose slope is at least the maximum slope of the interval minus one
+    standard deviation of the slope.
+    """
+    slope = pl.col(GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL)
+    max_slope = _as_float(interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].max())
+    slope_std = _as_float(interval[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL].std() or 0.0)
+
+    steepest = interval.filter(slope >= max_slope - slope_std)  # 3 sigma rule too loose
+    return interval if steepest.height == 0 else steepest
+
+
+def initial_interval_stats(interval: pl.DataFrame) -> IntervalStats:
+    """
+    Initial slope of a recovery interval: median slope of its steepest part. The drawn line starts at
+    the lowest smoothed value of the steepest part and rises by median slope times number of points.
+
+    Parameters
+    ----------
+    interval: pl.DataFrame
+        Rows of one recovery interval.
+
+    Returns
+    -------
+    IntervalStats
+    """
+    steepest = _steepest_part(interval)
+    slopes = steepest[GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_COL]
+    median_slope = _as_float(slopes.median())
+    offset = _as_float(steepest[GAUSSIAN_SIGNAL_SMOOTHING_COL].min())
+
+    return IntervalStats(
+        start_s=_as_int(steepest[ELAPSED_SEC_COL].first()),
+        end_s=_as_int(steepest[ELAPSED_SEC_COL].last()),
+        y_start=offset,
+        y_end=median_slope * steepest.height + offset,
+        slope=median_slope,
+        slope_max=_as_float(slopes.max()),
+        slope_std=_as_float(slopes.std() or 0.0),
+        method=INITIAL_SLOPE_METHOD,
+    )
 
 
 def interval_stats(data: pl.DataFrame, start_s: float, end_s: float) -> IntervalStats:
     """
-    Calculates the secant slope of the smoothed signal between the data points closest to start_s and end_s.
+    Straight line between the two data points closest to start_s and end_s, used when a user changed the
+    interval. The slope is the amplitude change per second between the two points.
 
     Parameters
     ----------
@@ -271,7 +321,7 @@ def interval_stats(data: pl.DataFrame, start_s: float, end_s: float) -> Interval
     if start_idx > end_idx:
         start_idx, end_idx = end_idx, start_idx
 
-    delta_min = float(times[end_idx] - times[start_idx]) / 60
+    delta_s = float(times[end_idx] - times[start_idx])
     delta_y = float(smoothed[end_idx] - smoothed[start_idx])
     window_slopes = slopes[start_idx : end_idx + 1]
 
@@ -280,7 +330,132 @@ def interval_stats(data: pl.DataFrame, start_s: float, end_s: float) -> Interval
         end_s=int(times[end_idx]),
         y_start=float(smoothed[start_idx]),
         y_end=float(smoothed[end_idx]),
-        slope_per_min=delta_y / delta_min if delta_min > 0 else 0.0,
+        slope=delta_y / delta_s if delta_s > 0 else 0.0,
         slope_max=float(window_slopes.max()),
         slope_std=float(window_slopes.std(ddof=1)) if window_slopes.size > 1 else 0.0,
+        method=MANUAL_SLOPE_METHOD,
     )
+
+
+def recovery_intervals(data: pl.DataFrame) -> List[Tuple[int, pl.DataFrame]]:
+    """
+    Splits the processed data into its recovery intervals, ordered by time.
+
+    Returns
+    -------
+    List[Tuple[int, pl.DataFrame]]
+        (interval ID, rows of the interval) per recovery interval.
+    """
+    recoveries = data.filter(pl.col(IS_RECOVERY_COL))
+    intervals: List[Tuple[int, pl.DataFrame]] = [
+        (interval_id[0], interval)
+        for interval_id, interval in recoveries.group_by(
+            GAUSSIAN_SIGNAL_SMOOTHING_SLOPE_INTERVALS_ID_COL
+        )
+    ]
+    intervals.sort(key=lambda g: g[0])
+    return intervals
+
+
+def default_slope_window(interval: pl.DataFrame) -> Tuple[int, int]:
+    """
+    Starting window for the slope of a recovery interval: first and last data point whose slope
+    is at least the maximum slope of the interval minus one standard deviation, i.e. the steepest part.
+
+    Parameters
+    ----------
+    interval: pl.DataFrame
+        Rows of one recovery interval.
+
+    Returns
+    -------
+    Tuple[int, int]
+        Start and end in elapsed seconds.
+    """
+    steepest = _steepest_part(interval)
+
+    return (
+        _as_int(steepest[ELAPSED_SEC_COL].first()),
+        _as_int(steepest[ELAPSED_SEC_COL].last()),
+    )
+
+
+@dataclass(frozen=True)
+class IntervalEntry:
+    """One row of the recovery summary: one or, after merging, several recovery intervals."""
+
+    members: Tuple[int, ...]  # 1-based recovery interval numbers
+    extent_start_s: int  # whole recovery interval(s)
+    extent_end_s: int
+    stats: IntervalStats
+
+
+def interval_entries(
+    data: pl.DataFrame,
+    interval_bounds: Optional[Dict[int, Tuple[int, int]]] = None,
+) -> List[IntervalEntry]:
+    """
+    Slope per recovery interval. Intervals changed by the user (present in interval_bounds) get the
+    slope of the straight line between their two points; if two such windows overlap, they are merged
+    into one entry spanning both windows. All other intervals keep their initial slope.
+
+    Parameters
+    ----------
+    data: pl.DataFrame
+        Processed TOF events with marked recovery intervals.
+    interval_bounds: Optional[Dict[int, Tuple[int, int]]]
+        User adjusted window (start, end) in elapsed seconds per 1-based recovery interval number.
+
+    Returns
+    -------
+    List[IntervalEntry]
+        Ordered by start of the recovery interval(s).
+    """
+    interval_bounds = interval_bounds or {}
+
+    initial: List[IntervalEntry] = []
+    manual: List[IntervalEntry] = []
+    for number, (_, interval) in enumerate(recovery_intervals(data), start=1):
+        extent_start_s = _as_int(interval[ELAPSED_SEC_COL].first())
+        extent_end_s = _as_int(interval[ELAPSED_SEC_COL].last())
+        if number in interval_bounds:
+            start_s, end_s = interval_bounds[number]
+            manual.append(
+                IntervalEntry(
+                    (number,),
+                    extent_start_s,
+                    extent_end_s,
+                    interval_stats(data, start_s, end_s),
+                )
+            )
+        else:
+            initial.append(
+                IntervalEntry(
+                    (number,),
+                    extent_start_s,
+                    extent_end_s,
+                    initial_interval_stats(interval),
+                )
+            )
+
+    # Chain manual windows that overlap (touching counts) into one
+    merged: List[IntervalEntry] = []
+    for entry in sorted(manual, key=lambda e: e.stats.start_s):
+        if merged and entry.stats.start_s <= merged[-1].stats.end_s:
+            previous = merged.pop()
+            merged.append(
+                IntervalEntry(
+                    previous.members + entry.members,
+                    min(previous.extent_start_s, entry.extent_start_s),
+                    max(previous.extent_end_s, entry.extent_end_s),
+                    interval_stats(
+                        data,
+                        previous.stats.start_s,
+                        max(previous.stats.end_s, entry.stats.end_s),
+                    ),
+                )
+            )
+        else:
+            merged.append(entry)
+
+    return sorted(initial + merged, key=lambda e: (e.extent_start_s, e.stats.start_s))
